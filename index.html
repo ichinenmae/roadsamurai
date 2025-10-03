@@ -92,11 +92,15 @@
       left: 50%;
       transform: translateX(-50%);
       display: none;
-      gap: 100px;
       z-index: 1000;
     }
     #touchControls.active {
-      display: flex;
+      display: grid;
+      grid-template-columns: 80px 80px 80px;
+      grid-template-rows: 80px 80px;
+      gap: 20px;
+      align-items: center;
+      justify-items: center;
     }
     .touch-btn {
       width: 80px;
@@ -116,6 +120,22 @@
     }
     .touch-btn:active {
       background: rgba(255, 255, 255, 0.5);
+    }
+    #btnUp {
+      grid-column: 2;
+      grid-row: 1;
+    }
+    #btnLeft {
+      grid-column: 1;
+      grid-row: 2;
+    }
+    #btnDown {
+      grid-column: 2;
+      grid-row: 2;
+    }
+    #btnRight {
+      grid-column: 3;
+      grid-row: 2;
     }
     #startScreen, #gameOverScreen {
       position: fixed;
@@ -173,7 +193,9 @@
   <canvas id="gameCanvas" width="720" height="1280"></canvas>
   
   <div id="touchControls">
+    <div class="touch-btn" id="btnUp">▲</div>
     <div class="touch-btn" id="btnLeft">◄</div>
+    <div class="touch-btn" id="btnDown">▼</div>
     <div class="touch-btn" id="btnRight">►</div>
   </div>
 
@@ -217,7 +239,11 @@
       height: V_HEIGHT * 0.125,
       speed: 6,
       moveLeft: false,
-      moveRight: false
+      moveRight: false,
+      currentSpeed: 9,  // 現在の速度（ゲーム内速度）
+      targetSpeed: 9,   // 目標速度
+      speedKmh: 60,     // 表示用速度（km/h）
+      acceleration: 0.15  // 加速度
     };
 
     // 道路設定
@@ -244,6 +270,8 @@
     const keys = {};
     let touchLeftActive = false;
     let touchRightActive = false;
+    let touchUpActive = false;
+    let touchDownActive = false;
 
     // 道路左端X座標を計算
     function roadLeftX() {
@@ -438,9 +466,12 @@
 
     // 障害物更新
     function updateObstacles(deltaTime) {
+      // プレイヤー速度に基づく相対速度計算
+      const speedRatio = player.currentSpeed / 9;  // 巡航速度(9)を基準
+      
       // 移動
       for (const obs of game.obstacles) {
-        obs.y += obs.speed * game.speedMultiplier;
+        obs.y += obs.speed * game.speedMultiplier * speedRatio;
         
         // 車線変更処理（逆走車は車線変更しない）
         if (obs.canChangeLane && !obs.isReverse) {
@@ -480,11 +511,11 @@
           // 当たり判定での接触チェック（スケール1.3で大きめに判定）
           // 逆走車同士または逆走車と通常車は衝突判定しない
           if (isCollidingEnemyEnemy(a, b) && !(a.isReverse || b.isReverse)) {
-            // 下側の障害物を上側に合わせる（速度を同期）
+            // 下側（後続）の障害物を上側（先行）の速度に合わせる
             if (a.y > b.y) {
-              a.speed = b.speed;  // 下側を上側の速度に合わせる
+              a.speed = b.speed;  // aが下側なのでbの速度に合わせる
             } else if (b.y > a.y) {
-              b.speed = a.speed;  // 下側を上側の速度に合わせる
+              b.speed = a.speed;  // bが下側なのでaの速度に合わせる
             }
           }
           
@@ -506,10 +537,18 @@
         }
       }
 
-      // プレイヤーとの衝突判定
+      // プレイヤーとの衝突判定（速度によってダメージ変化）
       for (const obs of game.obstacles) {
         if (isCollidingPlayerEnemy(player, obs)) {
-          game.life = Math.max(0, game.life - 50);
+          // 速度によってダメージを変更
+          let damage = 50;  // デフォルト（巡航）
+          if (player.speedKmh >= 80) {
+            damage = 75;  // 高速
+          } else if (player.speedKmh <= 40) {
+            damage = 25;  // 低速・停止
+          }
+          
+          game.life = Math.max(0, game.life - damage);
           // 衝突した障害物を削除
           game.obstacles = game.obstacles.filter(o => o !== obs);
           
@@ -551,8 +590,35 @@
 
     // プレイヤー更新
     function updatePlayer() {
-      const moving = keys['ArrowLeft'] || keys['ArrowRight'] || touchLeftActive || touchRightActive;
+      // 速度変更入力
+      if (keys['ArrowUp'] || touchUpActive) {
+        // 加速（次の段階へ）
+        if (player.targetSpeed === 0) player.targetSpeed = 6;
+        else if (player.targetSpeed === 6) player.targetSpeed = 9;
+        else if (player.targetSpeed === 9) player.targetSpeed = 12;
+      }
+      if (keys['ArrowDown'] || touchDownActive) {
+        // 減速（前の段階へ）
+        if (player.targetSpeed === 12) player.targetSpeed = 9;
+        else if (player.targetSpeed === 9) player.targetSpeed = 6;
+        else if (player.targetSpeed === 6) player.targetSpeed = 0;
+      }
       
+      // 速度を目標に向けて連続的に変化
+      if (player.currentSpeed < player.targetSpeed) {
+        player.currentSpeed = Math.min(player.targetSpeed, player.currentSpeed + player.acceleration);
+      } else if (player.currentSpeed > player.targetSpeed) {
+        player.currentSpeed = Math.max(player.targetSpeed, player.currentSpeed - player.acceleration);
+      }
+      
+      // km/h表示用に変換
+      if (player.currentSpeed >= 11.5) player.speedKmh = 80;
+      else if (player.currentSpeed >= 7.5) player.speedKmh = Math.round((player.currentSpeed / 9) * 60);
+      else if (player.currentSpeed >= 3) player.speedKmh = Math.round((player.currentSpeed / 6) * 40);
+      else if (player.currentSpeed > 0) player.speedKmh = Math.round((player.currentSpeed / 6) * 40);
+      else player.speedKmh = 0;
+      
+      // 左右移動
       if (keys['ArrowLeft'] || touchLeftActive) {
         player.x -= player.speed;
       }
@@ -722,6 +788,12 @@
       ctx.textAlign = 'left';
       ctx.fillText(`スコア: ${game.score}`, 20, 50);
       
+      // スピードメーター（デジタル表示）
+      ctx.fillStyle = '#0f0';
+      ctx.font = 'bold 40px Arial';
+      ctx.textAlign = 'right';
+      ctx.fillText(`${player.speedKmh} km/h`, V_WIDTH - 20, 55);
+      
       // ライフバー
       const barX = 20;
       const barY = UI_HEIGHT - 60;
@@ -797,6 +869,9 @@
       game.distanceTraveled = 0;
       
       player.x = V_WIDTH / 2;
+      player.currentSpeed = 9;
+      player.targetSpeed = 9;
+      player.speedKmh = 60;
       road.curveCurrent = 0;
       road.curveTarget = 0;
       road.centerLineY = -200;  // リセット時も初期位置から
@@ -865,6 +940,26 @@
     document.getElementById('btnRight').addEventListener('touchend', e => {
       e.preventDefault();
       touchRightActive = false;
+    });
+
+    document.getElementById('btnUp').addEventListener('touchstart', e => {
+      e.preventDefault();
+      touchUpActive = true;
+    });
+
+    document.getElementById('btnUp').addEventListener('touchend', e => {
+      e.preventDefault();
+      touchUpActive = false;
+    });
+
+    document.getElementById('btnDown').addEventListener('touchstart', e => {
+      e.preventDefault();
+      touchDownActive = true;
+    });
+
+    document.getElementById('btnDown').addEventListener('touchend', e => {
+      e.preventDefault();
+      touchDownActive = false;
     });
 
     // スタートボタン
